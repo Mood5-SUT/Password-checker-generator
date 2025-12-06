@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Password Auditor — Local & Secure</title>
+
+    <!-- zxcvbn from CDN for entropy/guesses/time estimates -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/zxcvbn/4.4.2/zxcvbn.js" integrity="" crossorigin="anonymous"></script>
+
+    <style>
+      :root{
+        --bg:#0f1724; --card:#0b1220; --muted:#9aa4b2;
+        --good:#16a34a; --warn:#f59e0b; --bad:#ef4444; --info:#3b82f6;
+        font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+        color: #e6eef6;
+      }
+      body{
+        background: linear-gradient(180deg,#071029 0%, #08122a 100%);
+        margin:0; padding:32px; min-height:100vh; box-sizing:border-box;
+        display:flex; align-items:center; justify-content:center;
+      }
+      .card{
+        width:100%; max-width:820px; background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+        border-radius:12px; padding:20px; box-shadow: 0 6px 30px rgba(2,6,23,0.6);
+        border: 1px solid rgba(255,255,255,0.03);
+      }
+      h1{ margin:0 0 6px 0; font-size:20px; }
+      p.lead{ margin:0 0 18px 0; color:var(--muted); font-size:13px; }
+      label{ display:block; font-size:13px; color:var(--muted); margin-bottom:6px; }
+      .input-row{ display:flex; gap:8px; align-items:center; }
+      input[type=password]{ flex:1; padding:12px 14px; border-radius:8px; border:1px solid rgba(255,255,255,0.04);
+        background: rgba(255,255,255,0.02); color:inherit; font-size:15px; outline:none; }
+      button{ padding:10px 12px; border-radius:8px; border:0; cursor:pointer; font-weight:600; }
+      .btn-primary{ background:var(--info); color:white; }
+      .btn-ghost{ background:transparent; color:var(--muted); border:1px solid rgba(255,255,255,0.02); }
+
+      .meter{ height:12px; border-radius:8px; overflow:hidden; background:rgba(255,255,255,0.03); margin-top:12px; }
+      .meter > span{ display:block; height:100%; width:0%; transition: width 220ms, background 220ms; }
+
+      .row{ display:flex; gap:18px; margin-top:18px; }
+      .col{ flex:1; min-width:0; }
+
+      .panel{ background:rgba(255,255,255,0.015); padding:12px; border-radius:8px; font-size:13px; color:var(--muted); border:1px solid rgba(255,255,255,0.02); }
+
+      .badge{ display:inline-block; font-weight:700; padding:6px 8px; border-radius:8px; font-size:12px; color:white; }
+
+      .pwned{ color:var(--bad); font-weight:700; }
+      .safe{ color:var(--good); font-weight:700; }
+
+      ul.tips{ margin:8px 0 0 18px; color:var(--muted); }
+      footer.note{ margin-top:12px; font-size:12px; color:var(--muted); }
+
+      .small-muted{ font-size:12px; color:var(--muted); margin-top:6px; }
+      .inline{ display:inline-flex; gap:8px; align-items:center; }
+
+      pre.debug{ max-height:120px; overflow:auto; background:rgba(255,255,255,0.02); padding:10px; border-radius:8px; font-size:12px; color:var(--muted);}
+    
+      nav.topbar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      background: rgba(15,23,36,0.95);
+      padding: 12px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      z-index: 1000;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+      }
+      nav.topbar a {
+        color: #3b82f6;
+        text-decoration: none;
+        font-weight: 500;
+      }
+
+    </style>
+  </head>
+  <body>
+
+    <!-- Top navigation bar -->
+    <nav style="position:fixed; top:0; left:0; width:97%; background:rgba(15,23,36,0.95); padding:12px 24px; display:flex; justify-content:space-between; align-items:center; z-index:1000; box-shadow:0 2px 6px rgba(0,0,0,0.3);">
+      <div style="font-weight:700; font-size:18px; color:#e6eef6;">Password Auditor</div>
+      <div style="display:flex; gap:12px;">
+        <a href="Checker.html" style="color:#3b82f6; text-decoration:none; font-weight:500;">Password Checker</a>
+        <a href="Generator.html" style="color:#3b82f6; text-decoration:none; font-weight:500;">Password Generator</a>
+      </div>
+    </nav>
+
+    <!-- Add spacing so content does not go under nav -->
+    <div style="height:60px;"></div>
+
+    <main class="card" role="main" aria-labelledby="title">
+      <h1 id="title">Password Checker</h1>
+      <p class="lead">Checks strength locally (zxcvbn) and uses k-anonymity to securely check Have I Been Pwned for exposures.</p>
+
+      <label for="pw">Enter password (never sent in plain):</label>
+      <div class="input-row">
+        <input id="pw" type="password" aria-describedby="status" autocomplete="new-password" placeholder="Type a password to test" />
+        <button id="toggle" class="btn-ghost" type="button">Show</button>
+        <button id="copy" class="btn-primary" type="button">Copy</button>
+      </div>
+
+      <div class="meter" aria-hidden="true" title="strength meter">
+        <span id="meterBar" style="width:0%"></span>
+      </div>
+
+      <div class="row" style="margin-top:14px;">
+        <div class="col panel" aria-live="polite">
+          <div class="inline">
+            <div id="scoreBadge" class="badge" style="background:var(--bad)">Score: —</div>
+            <div style="margin-left:8px;">
+              <div id="crackTime">Time to crack: —</div>
+              <div id="entropy" class="small-muted">Entropy: —</div>
+            </div>
+          </div>
+
+          <div id="feedback" style="margin-top:12px;">
+            <strong>Feedback:</strong>
+            <div id="feedbackText" class="small-muted">Type a password to see advice (zxcvbn suggestions).</div>
+          </div>
+        </div>
+
+        <div class="col panel" aria-live="polite">
+          <div>
+            <strong>Breached check (HIBP)</strong>
+          </div>
+          <div style="margin-top:8px;">
+            <div id="pwnStatus" class="small-muted">No check performed yet.</div>
+            <div id="pwnCount" style="margin-top:8px;"></div>
+          </div>
+          <div class="small-muted" style="margin-top:8px;">
+            Only the first 5 characters of the password's SHA-1 hash are sent (k-anonymity).
+          </div>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:14px;">
+        <div class="col panel">
+          <strong>Quick tips</strong>
+          <ul class="tips">
+            <li>Use a unique password per site — consider a password manager.</li>
+            <li>Long passphrases (4+ unrelated words) are often better than complex short passwords.</li>
+            <li>If pwned, change the password immediately and re-use is unsafe.</li>
+          </ul>
+        </div>
+        <div class="col panel">
+          <strong>Advanced / debug</strong>
+          <div class="small-muted">Cached HIBP responses and helper info:</div>
+          <pre id="debug" class="debug">idle</pre>
+        </div>
+      </div>
+
+      <footer class="note">
+        This demo hashes the password with SHA-1 in-browser and only queries HIBP's range API with the first 5 chars.
+        Do not paste sensitive master passwords into experimental pages — ideally use this demo locally or self-host.
+      </footer>
+    </main>
+
+    <script>
+      // Helper: convert ArrayBuffer -> hex string (uppercase)
+      function bufferToHex(buffer) {
+        const bytes = new Uint8Array(buffer);
+        const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+        return hex.toUpperCase();
+      }
+
+      // Compute SHA-1 with SubtleCrypto -> returns uppercase hex
+      async function sha1Hex(text) {
+        const enc = new TextEncoder();
+        const data = enc.encode(text);
+        const hashBuffer = await crypto.subtle.digest('SHA-1', data);
+        return bufferToHex(hashBuffer);
+      }
+
+      // UI references
+      const pwInput = document.getElementById('pw');
+      const meterBar = document.getElementById('meterBar');
+      const scoreBadge = document.getElementById('scoreBadge');
+      const crackTime = document.getElementById('crackTime');
+      const entropyEl = document.getElementById('entropy');
+      const feedbackText = document.getElementById('feedbackText');
+      const pwnStatus = document.getElementById('pwnStatus');
+      const pwnCount = document.getElementById('pwnCount');
+      const debug = document.getElementById('debug');
+      const toggle = document.getElementById('toggle');
+      const copyBtn = document.getElementById('copy');
+
+      // Simple color mapping for score 0..4
+      const scoreColors = [
+        {bg:'var(--bad)', pct:12},
+        {bg:'var(--bad)', pct:32},
+        {bg:'var(--warn)', pct:56},
+        {bg:'var(--info)', pct:78},
+        {bg:'var(--good)', pct:98}
+      ];
+
+      let lastQuery = null;
+      const hibpCache = new Map(); // cache by first5
+
+      async function checkPassword(pw) {
+        if (!pw) {
+          meterBar.style.width = '0%';
+          scoreBadge.textContent = 'Score: —';
+          scoreBadge.style.background = 'rgba(255,255,255,0.04)';
+          crackTime.textContent = 'Time to crack: —';
+          entropyEl.textContent = 'Entropy: —';
+          feedbackText.textContent = 'Type a password to see advice (zxcvbn suggestions).';
+          pwnStatus.textContent = 'No check performed yet.';
+          pwnCount.textContent = '';
+          debug.textContent = 'idle';
+          return;
+        }
+
+        // 1) zxcvbn analysis (runs locally and does not send pw)
+        let zx;
+        try {
+          zx = zxcvbn(pw);
+        } catch(e) {
+          zx = null;
+        }
+
+        if (zx) {
+          const score = zx.score; // 0..4
+          const mapping = scoreColors[score] || scoreColors[0];
+          meterBar.style.width = mapping.pct + '%';
+          meterBar.style.background = mapping.bg;
+          scoreBadge.textContent = 'Score: ' + score;
+          scoreBadge.style.background = mapping.bg;
+
+          // zxcvbn provides crack time estimation strings
+          const t = zx.crack_times_display.offline_slow_hashing_1e4_per_second || zx.crack_times_display.offline_fast_hashing_1e10_per_second;
+          crackTime.textContent = 'Time to crack: ' + (t || 'unknown');
+          entropyEl.textContent = 'Estimated guesses: ' + (zx.guesses ? Number(zx.guesses).toLocaleString() + ' guesses' : '—') + ' — Entropy (bits): ' + (zx.entropy ? zx.entropy.toFixed(1) : '—');
+
+          // feedback
+          let advice = [];
+          if (zx.feedback && zx.feedback.suggestions && zx.feedback.suggestions.length) {
+            advice = zx.feedback.suggestions.slice(0,3);
+          }
+          if (zx.feedback && zx.feedback.warning) advice.unshift(zx.feedback.warning);
+          feedbackText.textContent = advice.length ? advice.join(' ') : 'Looks good — but ensure uniqueness and length (use a passphrase).';
+        } else {
+          feedbackText.textContent = 'Strength library unavailable.';
+        }
+
+        // 2) HIBP pwned passwords k-anonymity check
+        // We perform in-browser SHA-1 and send only first 5 hex chars.
+        try {
+          pwnStatus.textContent = 'Hashing and checking...';
+          const sha1 = await sha1Hex(pw); // uppercase hex
+          const prefix = sha1.slice(0,5);
+          const suffix = sha1.slice(5);
+          debug.textContent = `sha1: ${sha1}\nprefix: ${prefix}\nsuffix: ${suffix}`;
+
+          // If cached, use it
+          let text = hibpCache.get(prefix);
+          if (!text) {
+            // HIBP range endpoint
+            // Note: API returns lines "HASH_SUFFIX:COUNT" where suffix is uppercase.
+            const url = 'https://api.pwnedpasswords.com/range/' + prefix;
+            // Optionally include 'Add-Padding: true' to improve privacy — HIBP supports it.
+            const resp = await fetch(url, { headers: { 'Accept': 'text/plain' } });
+            if (!resp.ok) {
+              pwnStatus.textContent = 'HIBP request failed: ' + resp.status;
+              hibpCache.set(prefix, null);
+              return;
+            }
+            text = await resp.text();
+            hibpCache.set(prefix, text);
+          }
+
+          if (!text) {
+            pwnStatus.textContent = 'No HIBP data (cached as null).';
+            return;
+          }
+
+          // Find suffix in returned list
+          // Response lines: "0072A8D1D8F2F5E3E3B8A7D6C2BCE3D5:2"
+          const lines = text.split('\n');
+          let foundCount = 0;
+          for (const line of lines) {
+            const parts = line.trim().split(':');
+            if (parts.length < 2) continue;
+            const returnedSuffix = parts[0].trim().toUpperCase();
+            const count = parseInt(parts[1].trim(), 10) || 0;
+            if (returnedSuffix === suffix.toUpperCase()) {
+              foundCount = count;
+              break;
+            }
+          }
+
+          if (foundCount > 0) {
+            pwnStatus.innerHTML = `<span class="pwned">Exposed in breaches</span>`;
+            pwnCount.textContent = `Times seen in breaches: ${foundCount.toLocaleString()}. Change and stop reuse immediately.`;
+          } else {
+            pwnStatus.innerHTML = `<span class="safe">Not found in HIBP range (first-5 match)</span>`;
+            pwnCount.textContent = 'No direct match found in the returned suffixes.';
+          }
+
+        } catch (e) {
+          pwnStatus.textContent = 'HIBP check error: ' + e.message;
+          debug.textContent = 'Error: ' + e.stack;
+        }
+      }
+
+      // Event handlers: debounce input
+      let debounceTimer = null;
+      pwInput.addEventListener('input', (e) => {
+        const v = e.target.value;
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => checkPassword(v), 200);
+      });
+
+      // Toggle show/hide
+      toggle.addEventListener('click', () => {
+        if (pwInput.type === 'password') {
+          pwInput.type = 'text';
+          toggle.textContent = 'Hide';
+        } else {
+          pwInput.type = 'password';
+          toggle.textContent = 'Show';
+        }
+      });
+
+      // Copy password (useful for testing) — note: copying to clipboard may be sensitive; warn user in UI.
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(pwInput.value);
+          copyBtn.textContent = 'Copied';
+          setTimeout(()=> copyBtn.textContent = 'Copy', 1600);
+        } catch (e) {
+          copyBtn.textContent = 'Copy failed';
+          setTimeout(()=> copyBtn.textContent = 'Copy', 1600);
+        }
+      });
+
+      // On load: focus input
+      pwInput.focus();
+
+      const tipsList = document.querySelector(".tips");
+
+      function updateTips(zx, pw) {
+        tipsList.innerHTML = ""; // clear old tips
+
+        if (!zx) return;
+
+        let suggestions = [];
+
+        // Use zxcvbn feedback suggestions
+        if (zx.feedback && zx.feedback.suggestions && zx.feedback.suggestions.length) {
+          suggestions.push(...zx.feedback.suggestions);
+        }
+        if (zx.feedback && zx.feedback.warning) {
+          suggestions.unshift(zx.feedback.warning);
+        }
+
+        // Custom dynamic suggestion examples
+        if (pw.length < 8) {
+          suggestions.push(`Password is short — adding extra chars can improve score.`);
+        }
+        if (/^\d+$/.test(pw)) {
+          suggestions.push(`Password is only numbers — prepend letters or symbols like "A${pw}" to improve.`);
+        }
+        if (/^[a-z]+$/.test(pw)) {
+          suggestions.push(`Password is only lowercase — adding uppercase, numbers, or symbols will strengthen it.`);
+        }
+        if (/^[A-Z]+$/.test(pw)) {
+          suggestions.push(`Password is only uppercase — adding lowercase, numbers, or symbols will strengthen it.`);
+        }
+        if (/^[a-zA-Z0-9]+$/.test(pw) && pw.length < 12) {
+          suggestions.push(`Adding symbols like "!" or "#" will improve the strength.`);
+        }
+
+        // Show top 5 suggestions
+        suggestions.slice(0,5).forEach(s => {
+          const li = document.createElement("li");
+          li.textContent = s;
+          tipsList.appendChild(li);
+        });
+      }
+
+      // Update the input event to include dynamic tips
+      pwInput.addEventListener('input', async (e) => {
+        const v = e.target.value;
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(async () => {
+          const zx = zxcvbn(v);
+          updateTips(zx, v);
+          await checkPassword(v);
+        }, 200);
+      });
+
+    
+    </script>
+  </body>
+</html>
